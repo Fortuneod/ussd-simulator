@@ -25,7 +25,7 @@
         body {
             margin: 0;
             padding: 24px;
-            background: var(--bgw);
+            background: var(--bg);
             color: var(--text);
             display: flex;
             justify-content: center;
@@ -121,6 +121,7 @@
 
         .dial-display {
             width: 100%;
+            min-height: 42px;
             background: transparent;
             border: none;
             color: #fff;
@@ -359,7 +360,7 @@
         </div>
 
         <div class="screen">
-            <input id="dialDisplay" class="dial-display" value="*123#" readonly />
+            <input id="dialDisplay" class="dial-display" value="" readonly />
             <div class="keypad" id="keypad"></div>
             <div class="call-row">
                 <button class="btn-call" onclick="startSession()" title="Dial USSD">&#9742;</button>
@@ -387,13 +388,13 @@
         <em>Update the fields below to your actual values</em>
         <div class="field">
             <label>Backend Callback URL</label>
-            <input id="endpointUrl" value="http://localhost:3000/api/ussd" />
+            <input id="endpointUrl" placeholder="http://localhost:3000/api/ussd" />
         </div>
 
         <div class="row">
             <div class="field">
                 <label>Subscriber Phone (MSISDN)</label>
-                <input id="phoneNumber" value="+2348012345678" />
+                <input id="phoneNumber" placeholder="+2348012345678" />
             </div>
             <div class="field">
                 <label>Active Session ID</label>
@@ -420,7 +421,7 @@
 
         <div class="field">
             <label>Last Request Sent</label>
-            <pre id="reqLog">Dial a USSD code to start...</pre>
+            <pre id="reqLog">Dial *7707# to start...</pre>
         </div>
 
         <div class="field">
@@ -430,6 +431,18 @@
     </div>
 
     <script>
+        const ALLOWED_BASE_CODE = "*7707#";
+        const VALID_USSD_REGEX = /^\*7707(\*[^*#]+)*#$/;
+
+        function updateStatusClock() {
+            const now = new Date();
+            const hours = String(now.getHours()).padStart(2, "0");
+            const minutes = String(now.getMinutes()).padStart(2, "0");
+            document.getElementById("clock").textContent = `${hours}:${minutes}`;
+        }
+        updateStatusClock();
+        setInterval(updateStatusClock, 1000);
+
         const keys = [
             ["1", ""],
             ["2", "ABC"],
@@ -469,6 +482,16 @@
             secondsLeft: 180
         };
 
+        function parseDialedCode(code) {
+            if (!VALID_USSD_REGEX.test(code)) return null;
+            const suffix = code.slice(5, -1); // strips "*7707" and trailing "#"
+            const initialInputs = suffix.startsWith("*") ? suffix.slice(1).split("*") : [];
+            return {
+                serviceCode: ALLOWED_BASE_CODE,
+                initialInputs
+            };
+        }
+
         function resetTimer() {
             clearInterval(state.timer);
             state.secondsLeft = 180;
@@ -485,12 +508,27 @@
         function startSession() {
             const code = dialDisplay.value.trim();
             if (!code) return;
+
+            const parsed = parseDialedCode(code);
+            if (!parsed) {
+                document.getElementById("sessionId").value = "";
+                document.getElementById("latencyBadge").textContent = "(Blocked • MMI Error)";
+                document.getElementById("reqLog").textContent = `DIAL ${code}\nStatus: Rejected locally`;
+                document.getElementById("resLog").textContent =
+                    `Invalid shortcode "${code}". Only *7707# and its sub-codes (e.g. *7707*1#) are permitted.`;
+                updateCharCount("Connection problem or invalid MMI code.");
+                closeModal("Connection problem or invalid MMI code.");
+                return;
+            }
+
             state.sessionId = "SIM_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7);
-            state.serviceCode = code;
-            state.inputs = [];
+            state.serviceCode = parsed.serviceCode;
+            state.inputs = [...parsed.initialInputs];
             document.getElementById("sessionId").value = state.sessionId;
+
+            const initialStep = state.inputs.length > 0 ? state.inputs[state.inputs.length - 1] : "";
             openModal("Dialing " + code + "...", false);
-            sendStep("");
+            sendStep(initialStep);
         }
 
         function submitReply() {
@@ -554,13 +592,11 @@
             let isEnd = false;
             let displayMessage = raw;
 
-            // Support JSON responses (e.g. { "message": "...", "shouldClose": true })
             try {
                 const parsed = JSON.parse(raw);
                 displayMessage = parsed.message || parsed.text || raw;
                 isEnd = Boolean(parsed.shouldClose || parsed.end || parsed.type === "END");
             } catch (_) {
-                // Standard CON / END plain text response
                 if (raw.startsWith("END ")) {
                     isEnd = true;
                     displayMessage = raw.slice(4);
@@ -577,16 +613,6 @@
                 openModal(displayMessage, true);
             }
         }
-
-        function updateStatusClock() {
-            const now = new Date();
-            const hours = String(now.getHours()).padStart(2, "0");
-            const minutes = String(now.getMinutes()).padStart(2, "0");
-            document.getElementById("clock").textContent = `${hours}:${minutes}`;
-        }
-
-        updateStatusClock();
-        setInterval(updateStatusClock, 1000);
 
         function updateCharCount(msg) {
             const el = document.getElementById("charCount");
